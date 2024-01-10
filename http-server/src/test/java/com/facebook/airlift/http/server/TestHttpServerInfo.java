@@ -20,6 +20,7 @@ import com.facebook.airlift.node.NodeInfo;
 import org.testng.annotations.Test;
 
 import java.net.URI;
+import java.util.Optional;
 
 import static com.facebook.airlift.testing.Closeables.closeQuietly;
 import static org.testng.Assert.assertEquals;
@@ -41,10 +42,12 @@ public class TestHttpServerInfo
         serverConfig.setHttpEnabled(true);
         serverConfig.setHttpPort(0);
         serverConfig.setHttpsEnabled(true);
-        serverConfig.setHttpsPort(0);
         serverConfig.setAdminEnabled(true);
 
-        HttpServerInfo httpServerInfo = new HttpServerInfo(serverConfig, nodeInfo);
+        HttpsConfig httpsConfig = new HttpsConfig()
+                .setHttpsPort(0);
+
+        HttpServerInfo httpServerInfo = new HttpServerInfo(serverConfig, Optional.ofNullable(httpsConfig), nodeInfo);
 
         int httpPort = httpServerInfo.getHttpUri().getPort();
         assertEquals(httpServerInfo.getHttpUri(), new URI("http://[::1]:" + httpPort));

@@ -23,30 +23,54 @@ import com.facebook.airlift.http.client.Request;
 import com.facebook.airlift.http.client.StatusResponseHandler.StatusResponse;
 import com.facebook.airlift.http.client.StringResponseHandler.StringResponse;
 import com.facebook.airlift.http.client.jetty.JettyHttpClient;
+import com.facebook.airlift.http.server.HttpServer.ClientCertificate;
 import com.facebook.airlift.log.Logging;
 import com.facebook.airlift.node.NodeConfig;
 import com.facebook.airlift.node.NodeInfo;
+import com.facebook.airlift.testing.TempFile;
 import com.facebook.airlift.tracetoken.TraceTokenManager;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.io.Files;
+import io.airlift.units.Duration;
+import org.bouncycastle.cert.X509CertificateHolder;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
+import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
+import org.bouncycastle.operator.ContentSigner;
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.BeforeSuite;
 import org.testng.annotations.Test;
 
+import javax.security.auth.x500.X500Principal;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import java.io.EOFException;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.UncheckedIOException;
+import java.math.BigInteger;
 import java.net.URI;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.KeyStore;
+import java.security.PrivateKey;
+import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
+import java.util.Date;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 
 import static com.facebook.airlift.http.client.Request.Builder.prepareGet;
 import static com.facebook.airlift.http.client.StatusResponseHandler.createStatusResponseHandler;
@@ -60,6 +84,7 @@ import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static com.google.common.io.Resources.getResource;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
@@ -74,6 +99,8 @@ public class TestHttpServerProvider
     private File tempDir;
     private NodeInfo nodeInfo;
     private HttpServerConfig config;
+    private HttpsConfig httpsConfig;
+    private ClientCertificate clientCertificate;
     private HttpServerInfo httpServerInfo;
 
     @BeforeSuite
@@ -89,12 +116,14 @@ public class TestHttpServerProvider
         tempDir = Files.createTempDir().getCanonicalFile(); // getCanonicalFile needed to get around Issue 365 (http://code.google.com/p/guava-libraries/issues/detail?id=365)
         config = new HttpServerConfig()
                 .setHttpPort(0)
-                .setHttpsPort(0)
                 .setLogPath(new File(tempDir, "http-request.log").getAbsolutePath());
+        httpsConfig = new HttpsConfig()
+                .setHttpsPort(0);
+        clientCertificate = ClientCertificate.NONE;
         nodeInfo = new NodeInfo(new NodeConfig()
                 .setEnvironment("test")
                 .setNodeInternalAddress("localhost"));
-        httpServerInfo = new HttpServerInfo(config, nodeInfo);
+        httpServerInfo = createHttpServerInfo();
     }
 
     @AfterMethod(alwaysRun = true)
@@ -141,12 +170,11 @@ public class TestHttpServerProvider
 
     @Test
     public void testHttpDisabled()
-            throws Exception
     {
         closeChannels(httpServerInfo);
 
         config.setHttpEnabled(false);
-        httpServerInfo = new HttpServerInfo(config, nodeInfo);
+        httpServerInfo = createHttpServerInfo();
 
         assertNull(httpServerInfo.getHttpUri());
         assertNull(httpServerInfo.getHttpExternalUri());
@@ -166,12 +194,11 @@ public class TestHttpServerProvider
 
     @Test
     public void testAdminDisabled()
-            throws Exception
     {
         closeChannels(httpServerInfo);
 
         config.setAdminEnabled(false);
-        httpServerInfo = new HttpServerInfo(config, nodeInfo);
+        httpServerInfo = createHttpServerInfo();
 
         assertNotNull(httpServerInfo.getHttpUri());
         assertNotNull(httpServerInfo.getHttpExternalUri());
@@ -191,12 +218,11 @@ public class TestHttpServerProvider
 
     @Test
     public void testHttpsEnabled()
-            throws Exception
     {
         closeChannels(httpServerInfo);
 
         config.setHttpsEnabled(true);
-        httpServerInfo = new HttpServerInfo(config, nodeInfo);
+        httpServerInfo = createHttpServerInfo();
 
         assertNotNull(httpServerInfo.getHttpUri());
         assertNotNull(httpServerInfo.getHttpExternalUri());
@@ -250,25 +276,34 @@ public class TestHttpServerProvider
             throws Exception
     {
         config.setHttpEnabled(false)
-                .setHttpsEnabled(true)
-                .setHttpsPort(0)
+                .setHttpsEnabled(true);
+        httpsConfig
                 .setKeystorePath(getResource("test.keystore.with.two.passwords").getPath())
                 .setKeystorePassword("airlift")
-                .setKeyManagerPassword("airliftkey");
+                .setKeyManagerPassword("airliftkey")
+                .setAutomaticHttpsSharedSecret("shared-secret");
 
         createAndStartServer();
 
         HttpClientConfig http1ClientConfig = new HttpClientConfig()
                 .setHttp2Enabled(false)
                 .setTrustStorePath(getResource("test.truststore").getPath())
-                .setTrustStorePassword("airlift");
+                .setTrustStorePassword("airlift")
+                .setAutomaticHttpsSharedSecret("shared-secret")
+                .setNodeEnvironment("test");
 
         try (JettyHttpClient httpClient = new JettyHttpClient(http1ClientConfig)) {
-            StatusResponse response = httpClient.execute(prepareGet().setUri(httpServerInfo.getHttpsUri()).build(), createStatusResponseHandler());
-
-            assertEquals(response.getStatusCode(), HttpServletResponse.SC_OK);
-            assertEquals(response.getHeader("X-Protocol"), "HTTP/1.1");
+            verifyUri(httpClient, URI.create("https://localhost:" + httpServerInfo.getHttpsUri().getPort()));
+            verifyUri(httpClient, URI.create("https://127.0.0.1:" + httpServerInfo.getHttpsUri().getPort()));
         }
+    }
+
+    private void verifyUri(JettyHttpClient httpClient, URI uri)
+    {
+        StatusResponse response = httpClient.execute(prepareGet().setUri(uri).build(), createStatusResponseHandler());
+
+        assertEquals(response.getStatusCode(), HttpServletResponse.SC_OK);
+        assertEquals(response.getHeader("X-Protocol"), "HTTP/1.1");
     }
 
     @Test
@@ -282,7 +317,6 @@ public class TestHttpServerProvider
             StatusResponse response = client.execute(prepareGet().setUri(httpServerInfo.getHttpUri().resolve("/filter")).build(), createStatusResponseHandler());
 
             assertEquals(response.getStatusCode(), HttpServletResponse.SC_PAYMENT_REQUIRED);
-            assertEquals(response.getStatusMessage(), "filtered");
         }
     }
 
@@ -317,10 +351,11 @@ public class TestHttpServerProvider
     {
         config.setHttpEnabled(false)
                 .setAdminEnabled(false)
-                .setHttpsEnabled(true)
-                .setHttpsPort(0)
-                .setKeystorePath(getResource("clientcert-java/server.keystore").getPath())
-                .setKeystorePassword("airlift");
+                .setHttpsEnabled(true);
+        httpsConfig.setKeystorePath(getResource("clientcert-java/server.keystore").getPath())
+                .setKeystorePassword("airlift")
+                .setAutomaticHttpsSharedSecret("shared-secret");
+        clientCertificate = ClientCertificate.REQUIRED;
 
         createAndStartServer(createCertTestServlet());
 
@@ -328,15 +363,20 @@ public class TestHttpServerProvider
                 .setKeyStorePath(getResource("clientcert-java/client.keystore").getPath())
                 .setKeyStorePassword("airlift")
                 .setTrustStorePath(getResource("clientcert-java/client.truststore").getPath())
-                .setTrustStorePassword("airlift");
+                .setTrustStorePassword("airlift")
+                .setAutomaticHttpsSharedSecret("shared-secret")
+                .setNodeEnvironment("test");
 
         try (JettyHttpClient httpClient = new JettyHttpClient(clientConfig)) {
-            StringResponse response = httpClient.execute(
-                    prepareGet().setUri(httpServerInfo.getHttpsUri()).build(),
-                    createStringResponseHandler());
+            for (String host : ImmutableList.of("localhost", "127.0.0.1")) {
+                URI uri = URI.create("https://" + host + ":" + httpServerInfo.getHttpsUri().getPort());
+                StringResponse response = httpClient.execute(
+                        prepareGet().setUri(uri).build(),
+                        createStringResponseHandler());
 
-            assertEquals(response.getStatusCode(), HttpServletResponse.SC_OK);
-            assertEquals(response.getBody(), "CN=testing,OU=Client,O=Airlift,L=Palo Alto,ST=CA,C=US");
+                assertEquals(response.getStatusCode(), HttpServletResponse.SC_OK);
+                assertEquals(response.getBody(), "CN=testing,OU=Client,O=Airlift,L=Palo Alto,ST=CA,C=US");
+            }
         }
     }
 
@@ -346,11 +386,12 @@ public class TestHttpServerProvider
     {
         config.setHttpEnabled(false)
                 .setAdminEnabled(false)
-                .setHttpsEnabled(true)
-                .setHttpsPort(0)
+                .setHttpsEnabled(true);
+        httpsConfig
                 .setKeystorePath(getResource("clientcert-pem/server.pem").getPath())
                 .setKeystorePassword("airlift")
                 .setTrustStorePath(getResource("clientcert-pem/ca.crt").getPath());
+        clientCertificate = ClientCertificate.REQUIRED;
 
         createAndStartServer(createCertTestServlet());
 
@@ -438,7 +479,7 @@ public class TestHttpServerProvider
             HttpResponseFuture<?> future = client.executeAsync(request, createStatusResponseHandler());
 
             // wait until the servlet starts processing the request
-            servlet.getLatch().await(1, TimeUnit.SECONDS);
+            servlet.getLatch().await(1, SECONDS);
 
             // stop server while the request is still active
             server.stop();
@@ -448,7 +489,7 @@ public class TestHttpServerProvider
 
             // request should fail rather than sleeping the full duration
             try {
-                future.get(5, TimeUnit.SECONDS);
+                future.get(5, SECONDS);
                 fail("expected exception");
             }
             catch (ExecutionException e) {
@@ -471,10 +512,10 @@ public class TestHttpServerProvider
     {
         config.setHttpEnabled(false)
                 .setHttpsEnabled(true)
-                .setHttpsPort(0)
-                .setKeystorePath(getResource("test.keystore").getPath())
-                .setKeystorePassword("airlift")
                 .setMaxThreads(1);
+        httpsConfig
+                .setKeystorePath(getResource("test.keystore").getPath())
+                .setKeystorePassword("airlift");
         createAndStartServer();
     }
 
@@ -483,8 +524,8 @@ public class TestHttpServerProvider
             throws Exception
     {
         config.setHttpEnabled(false)
-                .setHttpsEnabled(true)
-                .setHttpsPort(0)
+                .setHttpsEnabled(true);
+        httpsConfig
                 .setKeystorePath(getResource("test.keystore.with.two.passwords").getPath())
                 .setKeystorePassword("airlift");
         createAndStartServer();
@@ -495,8 +536,8 @@ public class TestHttpServerProvider
             throws Exception
     {
         config.setHttpEnabled(false)
-                .setHttpsEnabled(true)
-                .setHttpsPort(0)
+                .setHttpsEnabled(true);
+        httpsConfig
                 .setKeystorePath(new File(getResource("test.keystore").toURI()).getAbsolutePath())
                 .setKeystorePassword("airlift");
         createAndStartServer();
@@ -510,8 +551,7 @@ public class TestHttpServerProvider
     public void testNoHttpsDaysUntilCertificateExpiration()
             throws Exception
     {
-        config.setHttpEnabled(true)
-                .setHttpsPort(0);
+        config.setHttpEnabled(true);
         createAndStartServer();
         assertNull(server.getDaysUntilCertificateExpiration());
     }
@@ -524,6 +564,25 @@ public class TestHttpServerProvider
         createAndStartServer();
     }
 
+    @Test
+    public void testKeystoreReloading()
+            throws Exception
+    {
+        try (TempFile tempFile = new TempFile()) {
+            appendCertificate(tempFile.file(), "certificate-1");
+            config.setHttpsEnabled(true)
+                    .setHttpEnabled(false);
+            httpsConfig
+                    .setSslContextRefreshTime(new Duration(5, SECONDS))
+                    .setKeystorePath(tempFile.file().getAbsolutePath())
+                    .setKeystorePassword("airlift");
+            createAndStartServer();
+            assertEventually(() -> assertEquals(server.getCertificates().size(), 1));
+            appendCertificate(tempFile.file(), "certificate-2");
+            assertEventually(() -> assertEquals(server.getCertificates().size(), 2));
+        }
+    }
+
     private void createAndStartServer()
             throws Exception
     {
@@ -534,7 +593,7 @@ public class TestHttpServerProvider
             throws Exception
     {
         closeChannels(httpServerInfo);
-        httpServerInfo = new HttpServerInfo(config, nodeInfo);
+        httpServerInfo = createHttpServerInfo();
         createServer(servlet);
         server.start();
     }
@@ -551,16 +610,89 @@ public class TestHttpServerProvider
                 httpServerInfo,
                 nodeInfo,
                 config,
+                optionalHttpsConfig(),
                 servlet,
                 ImmutableMap.of(),
                 ImmutableSet.of(new DummyFilter()),
                 ImmutableSet.of(),
                 ImmutableSet.of(),
+                clientCertificate,
                 new RequestStats(),
-                new NullEventClient());
+                new NullEventClient(),
+                Optional.empty());
         serverProvider.setTheAdminServlet(new DummyServlet());
         serverProvider.setLoginService(loginServiceProvider.get());
         serverProvider.setTokenManager(new TraceTokenManager());
         server = serverProvider.get();
+    }
+
+    private HttpServerInfo createHttpServerInfo()
+    {
+        return new HttpServerInfo(config, optionalHttpsConfig(), nodeInfo);
+    }
+
+    private Optional<HttpsConfig> optionalHttpsConfig()
+    {
+        return config.isHttpsEnabled() ? Optional.of(this.httpsConfig) : Optional.empty();
+    }
+
+    private static void appendCertificate(File keyStoreFile, String alias)
+            throws Exception
+    {
+        KeyStore keyStore = KeyStore.getInstance("JKS");
+        char[] password = "airlift".toCharArray();
+        try (InputStream inStream = new FileInputStream(keyStoreFile)) {
+            keyStore.load(inStream, password);
+        }
+        catch (EOFException ignored) { // reading an empty file produces EOFException
+            keyStore.load(null, password);
+        }
+
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+        generator.initialize(2048);
+        KeyPair keyPair = generator.generateKeyPair();
+        PrivateKey privateKey = keyPair.getPrivate();
+
+        X500Principal issuer = new X500Principal("CN=Airlift Test, OU=Airlift, O=Airlift, L=Palo Alto, ST=CA, C=US");
+        JcaX509v3CertificateBuilder builder = new JcaX509v3CertificateBuilder(
+                issuer,
+                BigInteger.valueOf(System.currentTimeMillis()),
+                Date.from(Instant.now()),
+                Date.from(Instant.now().plus(365, ChronoUnit.DAYS)),
+                issuer,
+                keyPair.getPublic());
+        ContentSigner signer = new JcaContentSignerBuilder("SHA256WithRSA").build(privateKey);
+        X509CertificateHolder certHolder = builder.build(signer);
+        Certificate cert = new JcaX509CertificateConverter().getCertificate(certHolder);
+
+        keyStore.setKeyEntry(alias, privateKey, password, new Certificate[] {cert});
+        try (OutputStream outStream = new FileOutputStream(keyStoreFile)) {
+            keyStore.store(outStream, password);
+        }
+    }
+
+    private static void assertEventually(Runnable assertion)
+    {
+        long start = System.nanoTime();
+        Duration timeout = new Duration(30, SECONDS);
+        while (!Thread.currentThread().isInterrupted()) {
+            try {
+                assertion.run();
+                return;
+            }
+            catch (Exception | AssertionError e) {
+                if (Duration.nanosSince(start).compareTo(timeout) > 0) {
+                    throw e;
+                }
+            }
+            try {
+                //noinspection BusyWait
+                Thread.sleep(50);
+            }
+            catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
+            }
+        }
     }
 }

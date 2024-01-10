@@ -17,21 +17,17 @@ package com.facebook.airlift.http.server;
 
 import com.facebook.airlift.configuration.Config;
 import com.facebook.airlift.configuration.ConfigDescription;
-import com.facebook.airlift.configuration.ConfigSecuritySensitive;
 import com.facebook.airlift.configuration.DefunctConfig;
 import com.google.common.base.Splitter;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.airlift.units.MaxDataSize;
 import io.airlift.units.MinDataSize;
-import io.airlift.units.MinDuration;
 
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
 
-import java.util.List;
 import java.util.Set;
 
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
@@ -39,7 +35,6 @@ import static io.airlift.units.DataSize.Unit.KILOBYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
-import static java.util.concurrent.TimeUnit.HOURS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -72,24 +67,6 @@ public class HttpServerConfig
     private int httpAcceptQueueSize = 8000;
 
     private boolean httpsEnabled;
-    private int httpsPort = 8443;
-    private String keystorePath;
-    private String keystorePassword;
-    private String keyManagerPassword;
-    private String trustStorePath;
-    private String trustStorePassword;
-    private String secureRandomAlgorithm;
-    private List<String> includedCipherSuites = ImmutableList.of();
-
-    /**
-     * This property is initialized with Jetty's default excluded ciphers list.
-     * @see org.eclipse.jetty.util.ssl.SslContextFactory#SslContextFactory(boolean, String)
-     */
-    private List<String> excludedCipherSuites = ImmutableList.of("^.*_(MD5|SHA|SHA1)$", "^TLS_RSA_.*$", "^SSL_.*$", "^.*_NULL_.*$", "^.*_anon_.*$");
-
-    private Duration sslSessionTimeout = new Duration(4, HOURS);
-    private int sslSessionCacheSize = 10_000;
-
     private String logPath = "var/log/http-request.log";
     private boolean logEnabled = true;
     private boolean requestStatsEnabled = true;
@@ -175,152 +152,6 @@ public class HttpServerConfig
     public HttpServerConfig setHttpsEnabled(boolean httpsEnabled)
     {
         this.httpsEnabled = httpsEnabled;
-        return this;
-    }
-
-    public int getHttpsPort()
-    {
-        return httpsPort;
-    }
-
-    @Config("http-server.https.port")
-    public HttpServerConfig setHttpsPort(int httpsPort)
-    {
-        this.httpsPort = httpsPort;
-        return this;
-    }
-
-    @MinDuration("1s")
-    public Duration getSslSessionTimeout()
-    {
-        return sslSessionTimeout;
-    }
-
-    @Config("http-server.https.ssl-session-timeout")
-    public HttpServerConfig setSslSessionTimeout(Duration sslSessionTimeout)
-    {
-        this.sslSessionTimeout = sslSessionTimeout;
-        return this;
-    }
-
-    @Min(1)
-    public int getSslSessionCacheSize()
-    {
-        return sslSessionCacheSize;
-    }
-
-    @Config("http-server.https.ssl-session-cache-size")
-    public HttpServerConfig setSslSessionCacheSize(int sslSessionCacheSize)
-    {
-        this.sslSessionCacheSize = sslSessionCacheSize;
-        return this;
-    }
-
-    public String getKeystorePath()
-    {
-        return keystorePath;
-    }
-
-    @Config("http-server.https.keystore.path")
-    public HttpServerConfig setKeystorePath(String keystorePath)
-    {
-        this.keystorePath = keystorePath;
-        return this;
-    }
-
-    public String getKeystorePassword()
-    {
-        return keystorePassword;
-    }
-
-    @Config("http-server.https.keystore.key")
-    @ConfigSecuritySensitive
-    public HttpServerConfig setKeystorePassword(String keystorePassword)
-    {
-        this.keystorePassword = keystorePassword;
-        return this;
-    }
-
-    public String getKeyManagerPassword()
-    {
-        return keyManagerPassword;
-    }
-
-    @Config("http-server.https.keymanager.password")
-    @ConfigSecuritySensitive
-    public HttpServerConfig setKeyManagerPassword(String keyManagerPassword)
-    {
-        this.keyManagerPassword = keyManagerPassword;
-        return this;
-    }
-
-    public String getTrustStorePath()
-    {
-        return trustStorePath;
-    }
-
-    @Config("http-server.https.truststore.path")
-    public HttpServerConfig setTrustStorePath(String trustStorePath)
-    {
-        this.trustStorePath = trustStorePath;
-        return this;
-    }
-
-    public String getTrustStorePassword()
-    {
-        return trustStorePassword;
-    }
-
-    @Config("http-server.https.truststore.key")
-    @ConfigSecuritySensitive
-    public HttpServerConfig setTrustStorePassword(String trustStorePassword)
-    {
-        this.trustStorePassword = trustStorePassword;
-        return this;
-    }
-
-    public String getSecureRandomAlgorithm()
-    {
-        return secureRandomAlgorithm;
-    }
-
-    @Config("http-server.https.secure-random-algorithm")
-    public HttpServerConfig setSecureRandomAlgorithm(String secureRandomAlgorithm)
-    {
-        this.secureRandomAlgorithm = secureRandomAlgorithm;
-        return this;
-    }
-
-    public List<String> getHttpsIncludedCipherSuites()
-    {
-        return includedCipherSuites;
-    }
-
-    @Config("http-server.https.included-cipher")
-    public HttpServerConfig setHttpsIncludedCipherSuites(String includedCipherSuites)
-    {
-        this.includedCipherSuites = Splitter
-                .on(',')
-                .trimResults()
-                .omitEmptyStrings()
-                .splitToList(requireNonNull(includedCipherSuites, "includedCipherSuites is null"));
-        return this;
-    }
-
-    public List<String> getHttpsExcludedCipherSuites()
-    {
-        return excludedCipherSuites;
-    }
-
-    @Config("http-server.https.excluded-cipher")
-    @ConfigDescription("Setting this config property overwrites Jetty's default excluded cipher suites")
-    public HttpServerConfig setHttpsExcludedCipherSuites(String excludedCipherSuites)
-    {
-        this.excludedCipherSuites = Splitter
-                .on(',')
-                .trimResults()
-                .omitEmptyStrings()
-                .splitToList(requireNonNull(excludedCipherSuites, "excludedCipherSuites is null"));
         return this;
     }
 

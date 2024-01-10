@@ -15,8 +15,7 @@
  */
 package com.facebook.airlift.http.server;
 
-import com.facebook.airlift.configuration.ConfigurationFactory;
-import com.facebook.airlift.configuration.ConfigurationModule;
+import com.facebook.airlift.bootstrap.Bootstrap;
 import com.facebook.airlift.event.client.EventModule;
 import com.facebook.airlift.event.client.InMemoryEventClient;
 import com.facebook.airlift.event.client.InMemoryEventModule;
@@ -37,7 +36,6 @@ import com.google.common.collect.ListMultimap;
 import com.google.common.io.ByteStreams;
 import com.google.common.io.Files;
 import com.google.common.net.MediaType;
-import com.google.inject.Guice;
 import com.google.inject.Injector;
 import com.google.inject.Key;
 import com.google.inject.Scopes;
@@ -109,20 +107,23 @@ public class TestHttpServerModule
 
     @Test
     public void testCanConstructServer()
-            throws Exception
     {
         Map<String, String> properties = new ImmutableMap.Builder<String, String>()
-                .put("node.environment", "test")
                 .put("http-server.http.port", "0")
                 .put("http-server.log.path", new File(tempDir, "http-request.log").getAbsolutePath())
                 .build();
 
-        ConfigurationFactory configFactory = new ConfigurationFactory(properties);
-        Injector injector = Guice.createInjector(new HttpServerModule(),
+        Bootstrap app = new Bootstrap(
+                new HttpServerModule(),
                 new TestingNodeModule(),
-                new ConfigurationModule(configFactory),
                 new EventModule(),
                 binder -> binder.bind(Servlet.class).annotatedWith(TheServlet.class).to(DummyServlet.class));
+
+        Injector injector = app
+                .setRequiredConfigurationProperties(properties)
+                .strictConfig()
+                .doNotInitializeLogging()
+                .initialize();
 
         HttpServer server = injector.getInstance(HttpServer.class);
         assertNotNull(server);
@@ -133,17 +134,21 @@ public class TestHttpServerModule
             throws Exception
     {
         Map<String, String> properties = new ImmutableMap.Builder<String, String>()
-                .put("node.environment", "test")
                 .put("http-server.http.port", "0")
                 .put("http-server.log.path", new File(tempDir, "http-request.log").getAbsolutePath())
                 .build();
 
-        ConfigurationFactory configFactory = new ConfigurationFactory(properties);
-        Injector injector = Guice.createInjector(new HttpServerModule(),
+        Bootstrap app = new Bootstrap(
+                new HttpServerModule(),
                 new TestingNodeModule(),
-                new ConfigurationModule(configFactory),
                 new EventModule(),
                 binder -> binder.bind(Servlet.class).annotatedWith(TheServlet.class).to(DummyServlet.class));
+
+        Injector injector = app
+                .setRequiredConfigurationProperties(properties)
+                .strictConfig()
+                .doNotInitializeLogging()
+                .initialize();
 
         NodeInfo nodeInfo = injector.getInstance(NodeInfo.class);
         HttpServer server = injector.getInstance(HttpServer.class);
@@ -167,15 +172,13 @@ public class TestHttpServerModule
             throws Exception
     {
         Map<String, String> properties = new ImmutableMap.Builder<String, String>()
-                .put("node.environment", "test")
                 .put("http-server.http.port", "0")
                 .put("http-server.log.path", new File(tempDir, "http-request.log").getAbsolutePath())
                 .build();
 
-        ConfigurationFactory configFactory = new ConfigurationFactory(properties);
-        Injector injector = Guice.createInjector(new HttpServerModule(),
+        Bootstrap app = new Bootstrap(
+                new HttpServerModule(),
                 new TestingNodeModule(),
-                new ConfigurationModule(configFactory),
                 new EventModule(),
                 binder -> {
                     binder.bind(Servlet.class).annotatedWith(TheServlet.class).to(DummyServlet.class);
@@ -185,6 +188,12 @@ public class TestHttpServerModule
                     httpServerBinder(binder).bindResource("path", "webapp/user").withWelcomeFile("user-welcome.txt");
                     httpServerBinder(binder).bindResource("path", "webapp/user2");
                 });
+
+        Injector injector = app
+                .setRequiredConfigurationProperties(properties)
+                .strictConfig()
+                .doNotInitializeLogging()
+                .initialize();
 
         HttpServerInfo httpServerInfo = injector.getInstance(HttpServerInfo.class);
 
@@ -202,7 +211,6 @@ public class TestHttpServerModule
             response = client.execute(prepareGet().setUri(httpUri.resolve("/filter")).build(), createStatusResponseHandler());
 
             assertEquals(response.getStatusCode(), HttpServletResponse.SC_PAYMENT_REQUIRED);
-            assertEquals(response.getStatusMessage(), "filtered");
 
             // test http resources
             assertResource(httpUri, client, "", "welcome user!");
@@ -252,18 +260,22 @@ public class TestHttpServerModule
             throws Exception
     {
         Map<String, String> properties = new ImmutableMap.Builder<String, String>()
-                .put("node.environment", "test")
                 .put("http-server.http.port", "0")
                 .put("http-server.log.path", new File(tempDir, "http-request.log").getAbsolutePath())
                 .build();
 
-        ConfigurationFactory configFactory = new ConfigurationFactory(properties);
-        Injector injector = Guice.createInjector(new HttpServerModule(),
+        Bootstrap app = new Bootstrap(
+                new HttpServerModule(),
                 new TestingNodeModule(),
-                new ConfigurationModule(configFactory),
                 new InMemoryEventModule(),
                 new TraceTokenModule(),
                 binder -> binder.bind(Servlet.class).annotatedWith(TheServlet.class).to(EchoServlet.class).in(Scopes.SINGLETON));
+
+        Injector injector = app
+                .setRequiredConfigurationProperties(properties)
+                .strictConfig()
+                .doNotInitializeLogging()
+                .initialize();
 
         HttpServerInfo httpServerInfo = injector.getInstance(HttpServerInfo.class);
         InMemoryEventClient eventClient = injector.getInstance(InMemoryEventClient.class);

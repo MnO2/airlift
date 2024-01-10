@@ -52,16 +52,24 @@ import org.weakref.jmx.Managed;
 import org.weakref.jmx.Nested;
 
 import javax.annotation.PreDestroy;
+import javax.security.auth.x500.X500Principal;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.GeneralSecurityException;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
 import java.security.KeyStore;
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map.Entry;
 import java.util.Objects;
@@ -75,11 +83,15 @@ import java.util.stream.Collectors;
 
 import static com.facebook.airlift.http.client.jetty.AuthorizationPreservingHttpClient.setPreserveAuthorization;
 import static com.facebook.airlift.http.utils.jetty.ConcurrentScheduler.createConcurrentScheduler;
+import static com.facebook.airlift.security.cert.CertificateBuilder.certificateBuilder;
+import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Throwables.throwIfUnchecked;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.time.temporal.ChronoUnit.YEARS;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
@@ -144,6 +156,16 @@ public class JettyHttpClient
             KerberosConfig kerberosConfig,
             Iterable<? extends HttpRequestFilter> requestFilters)
     {
+        this(name, config, kerberosConfig, requestFilters, Optional.empty());
+    }
+
+    public JettyHttpClient(
+            String name,
+            HttpClientConfig config,
+            KerberosConfig kerberosConfig,
+            Iterable<? extends HttpRequestFilter> requestFilters,
+            Optional<SslContextFactory.Client> maybeSslContextFactory)
+    {
         this.name = requireNonNull(name, "name is null");
 
         requireNonNull(config, "config is null");
@@ -157,35 +179,7 @@ public class JettyHttpClient
 
         creationLocation.fillInStackTrace();
 
-        SslContextFactory sslContextFactory = new SslContextFactory();
-        sslContextFactory.setEndpointIdentificationAlgorithm("HTTPS");
-        if (config.getKeyStorePath() != null) {
-            Optional<KeyStore> pemKeyStore = tryLoadPemKeyStore(config);
-            if (pemKeyStore.isPresent()) {
-                sslContextFactory.setKeyStore(pemKeyStore.get());
-                sslContextFactory.setKeyStorePassword("");
-            }
-            else {
-                sslContextFactory.setKeyStorePath(config.getKeyStorePath());
-                sslContextFactory.setKeyStorePassword(config.getKeyStorePassword());
-            }
-        }
-        if (config.getTrustStorePath() != null) {
-            Optional<KeyStore> pemTrustStore = tryLoadPemTrustStore(config);
-            if (pemTrustStore.isPresent()) {
-                sslContextFactory.setTrustStore(pemTrustStore.get());
-                sslContextFactory.setTrustStorePassword("");
-            }
-            else {
-                sslContextFactory.setTrustStorePath(config.getTrustStorePath());
-                sslContextFactory.setTrustStorePassword(config.getTrustStorePassword());
-            }
-        }
-        sslContextFactory.setSecureRandomAlgorithm(config.getSecureRandomAlgorithm());
-        List<String> includedCipherSuites = config.getHttpsIncludedCipherSuites();
-        List<String> excludedCipherSuites = config.getHttpsExcludedCipherSuites();
-        sslContextFactory.setIncludeCipherSuites(includedCipherSuites.toArray(new String[0]));
-        sslContextFactory.setExcludeCipherSuites(excludedCipherSuites.toArray(new String[0]));
+        SslContextFactory.Client sslContextFactory = maybeSslContextFactory.orElseGet(() -> getSslContextFactory(config));
 
         HttpClientTransport transport;
         if (config.isHttp2Enabled()) {
@@ -370,46 +364,126 @@ public class JettyHttpClient
         });
     }
 
-    private static Optional<KeyStore> tryLoadPemKeyStore(HttpClientConfig config)
+    private static SslContextFactory.Client getSslContextFactory(HttpClientConfig config)
     {
-        File keyStoreFile = new File(config.getKeyStorePath());
-        try {
-            if (!PemReader.isPem(keyStoreFile)) {
-                return Optional.empty();
-            }
-        }
-        catch (IOException e) {
-            throw new IllegalArgumentException("Error reading key store file: " + keyStoreFile, e);
+        SslContextFactory.Client sslContextFactory = new SslContextFactory.Client();
+        sslContextFactory.setEndpointIdentificationAlgorithm("HTTPS");
+        sslContextFactory.setSNIProvider(SslContextFactory.Client.SniProvider.NON_DOMAIN_SNI_PROVIDER);
+
+        String keyStorePassword = firstNonNull(config.getKeyStorePassword(), "");
+        KeyStore keyStore = null;
+        if (config.getKeyStorePath() != null) {
+            keyStore = loadKeyStore(config.getKeyStorePath(), config.getKeyStorePassword());
+            sslContextFactory.setKeyStore(keyStore);
+            sslContextFactory.setKeyStorePassword(keyStorePassword);
         }
 
+        if (config.getTrustStorePath() != null || config.getAutomaticHttpsSharedSecret() != null) {
+            KeyStore trustStore = loadTrustStore(config.getTrustStorePath(), config.getTrustStorePassword());
+            if (config.getAutomaticHttpsSharedSecret() != null) {
+                addAutomaticTrust(config.getAutomaticHttpsSharedSecret(), trustStore, config.getNodeEnvironment());
+            }
+            sslContextFactory.setTrustStore(trustStore);
+            sslContextFactory.setTrustStorePassword("");
+        }
+        else if (keyStore != null) {
+            // Backwards compatibility for with Jetty's internal behavior
+            sslContextFactory.setTrustStore(keyStore);
+            sslContextFactory.setTrustStorePassword(keyStorePassword);
+        }
+
+        sslContextFactory.setSecureRandomAlgorithm(config.getSecureRandomAlgorithm());
+        List<String> includedCipherSuites = config.getHttpsIncludedCipherSuites();
+        List<String> excludedCipherSuites = config.getHttpsExcludedCipherSuites();
+        sslContextFactory.setIncludeCipherSuites(includedCipherSuites.toArray(new String[0]));
+        sslContextFactory.setExcludeCipherSuites(excludedCipherSuites.toArray(new String[0]));
+
+        return sslContextFactory;
+    }
+
+    private static KeyStore loadKeyStore(String keystorePath, String keystorePassword)
+    {
+        requireNonNull(keystorePath, "keystorePath is null");
         try {
-            return Optional.of(PemReader.loadKeyStore(keyStoreFile, keyStoreFile, Optional.ofNullable(config.getKeyStorePassword())));
+            File keyStoreFile = new File(keystorePath);
+            if (PemReader.isPem(keyStoreFile)) {
+                return PemReader.loadKeyStore(keyStoreFile, keyStoreFile, Optional.ofNullable(keystorePassword), true);
+            }
         }
         catch (IOException | GeneralSecurityException e) {
-            throw new IllegalArgumentException("Error loading PEM key store: " + keyStoreFile, e);
+            throw new IllegalArgumentException("Error loading PEM key store: " + keystorePath, e);
+        }
+
+        try (InputStream in = new FileInputStream(keystorePath)) {
+            KeyStore keyStore = KeyStore.getInstance("JKS");
+            keyStore.load(in, keystorePassword.toCharArray());
+            return keyStore;
+        }
+        catch (IOException | GeneralSecurityException e) {
+            throw new IllegalArgumentException("Error loading Java key store: " + keystorePath, e);
         }
     }
 
-    private static Optional<KeyStore> tryLoadPemTrustStore(HttpClientConfig config)
+    private static KeyStore loadTrustStore(String truststorePath, String truststorePassword)
     {
-        File trustStoreFile = new File(config.getTrustStorePath());
-        try {
-            if (!PemReader.isPem(trustStoreFile)) {
-                return Optional.empty();
+        if (truststorePath == null) {
+            try {
+                KeyStore keyStore = KeyStore.getInstance("JKS");
+                keyStore.load(null, new char[0]);
+                return keyStore;
             }
-        }
-        catch (IOException e) {
-            throw new IllegalArgumentException("Error reading trust store file: " + trustStoreFile, e);
+            catch (GeneralSecurityException | IOException e) {
+                throw new RuntimeException(e);
+            }
         }
 
         try {
-            if (PemReader.readCertificateChain(trustStoreFile).isEmpty()) {
-                throw new IllegalArgumentException("PEM trust store file does not contain any certificates: " + trustStoreFile);
+            File keyStoreFile = new File(truststorePath);
+            if (PemReader.isPem(keyStoreFile)) {
+                return PemReader.loadTrustStore(keyStoreFile);
             }
-            return Optional.of(PemReader.loadTrustStore(trustStoreFile));
         }
         catch (IOException | GeneralSecurityException e) {
-            throw new IllegalArgumentException("Error loading PEM trust store: " + trustStoreFile, e);
+            throw new IllegalArgumentException("Error loading PEM trust store: " + truststorePath, e);
+        }
+
+        try (InputStream in = new FileInputStream(truststorePath)) {
+            KeyStore keyStore = KeyStore.getInstance("JKS");
+            keyStore.load(in, truststorePassword == null ? null : truststorePassword.toCharArray());
+            return keyStore;
+        }
+        catch (IOException | GeneralSecurityException e) {
+            throw new IllegalArgumentException("Error loading Java trust store: " + truststorePath, e);
+        }
+    }
+
+    private static void addAutomaticTrust(String sharedSecret, KeyStore keyStore, String commonName)
+    {
+        try {
+            byte[] seed = sharedSecret.getBytes(UTF_8);
+            SecureRandom secureRandom = SecureRandom.getInstance("SHA1PRNG");
+            secureRandom.setSeed(seed);
+
+            KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+            generator.initialize(2048, secureRandom);
+            KeyPair keyPair = generator.generateKeyPair();
+
+            X500Principal subject = new X500Principal("CN=" + commonName);
+            LocalDate notBefore = LocalDate.now();
+            LocalDate notAfter = notBefore.plus(10, YEARS);
+            X509Certificate certificateServer = certificateBuilder()
+                    .setKeyPair(keyPair)
+                    .setSerialNumber(System.currentTimeMillis())
+                    .setIssuer(subject)
+                    .setNotBefore(notBefore)
+                    .setNotAfter(notAfter)
+                    .setSubject(subject)
+                    .buildSelfSigned();
+
+            keyStore.setCertificateEntry(commonName, certificateServer);
+        }
+        catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 

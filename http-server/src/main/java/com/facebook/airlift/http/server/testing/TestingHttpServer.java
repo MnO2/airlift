@@ -21,6 +21,7 @@ import com.facebook.airlift.http.server.HttpServer;
 import com.facebook.airlift.http.server.HttpServerBinder.HttpResourceBinding;
 import com.facebook.airlift.http.server.HttpServerConfig;
 import com.facebook.airlift.http.server.HttpServerInfo;
+import com.facebook.airlift.http.server.HttpsConfig;
 import com.facebook.airlift.http.server.RequestStats;
 import com.facebook.airlift.http.server.TheServlet;
 import com.facebook.airlift.node.NodeInfo;
@@ -55,6 +56,7 @@ public class TestingHttpServer
         this(httpServerInfo,
                 nodeInfo,
                 config,
+                Optional.empty(),
                 servlet,
                 servlets,
                 initParameters,
@@ -68,6 +70,7 @@ public class TestingHttpServer
             HttpServerInfo httpServerInfo,
             NodeInfo nodeInfo,
             HttpServerConfig config,
+            Optional<HttpsConfig> httpsConfig,
             @TheServlet Servlet servlet,
             @TheServlet Map<String, Servlet> servlets,
             @TheServlet Map<String, String> initParameters,
@@ -79,6 +82,7 @@ public class TestingHttpServer
         super(httpServerInfo,
                 nodeInfo,
                 config.setLogEnabled(false),
+                httpsConfig,
                 servlet,
                 servlets,
                 initParameters,
@@ -87,12 +91,14 @@ public class TestingHttpServer
                 null,
                 null,
                 ImmutableSet.of(),
+                ClientCertificate.NONE,
                 null,
                 null,
                 new TraceTokenManager(),
                 new RequestStats(),
                 new NullEventClient(),
-                authorizer.orElse(null));
+                authorizer.orElse(null),
+                Optional.empty());
         this.httpServerInfo = httpServerInfo;
     }
 

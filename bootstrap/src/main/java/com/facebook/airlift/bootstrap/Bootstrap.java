@@ -139,6 +139,12 @@ public class Bootstrap
         return this;
     }
 
+    public Bootstrap strictConfig()
+    {
+        this.strictConfig = true;
+        return this;
+    }
+
     /**
      * Disable the requirement that required configuration property must be used
      * in some Config classes. This could be useful for testing purpose when

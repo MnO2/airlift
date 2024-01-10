@@ -281,7 +281,7 @@ public class TestTestingHttpServer
         NodeInfo nodeInfo = new NodeInfo("test");
         HttpServerConfig config = new HttpServerConfig().setHttpPort(0);
         HttpServerInfo httpServerInfo = new HttpServerInfo(config, nodeInfo);
-        return new TestingHttpServer(httpServerInfo, nodeInfo, config, servlet, ImmutableMap.of(), params, ImmutableSet.of(filter), ImmutableSet.of(), Optional.empty());
+        return new TestingHttpServer(httpServerInfo, nodeInfo, config, Optional.empty(), servlet, ImmutableMap.of(), params, ImmutableSet.of(filter), ImmutableSet.of(), Optional.empty());
     }
 
     static class DummyServlet

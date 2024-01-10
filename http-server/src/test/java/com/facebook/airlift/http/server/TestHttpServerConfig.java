@@ -15,21 +15,19 @@
  */
 package com.facebook.airlift.http.server;
 
-import com.facebook.airlift.configuration.testing.ConfigAssertions;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
-import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.testng.annotations.Test;
 
-import java.util.Arrays;
-import java.util.List;
 import java.util.Map;
 
+import static com.facebook.airlift.configuration.testing.ConfigAssertions.assertFullMapping;
+import static com.facebook.airlift.configuration.testing.ConfigAssertions.assertRecordedDefaults;
+import static com.facebook.airlift.configuration.testing.ConfigAssertions.recordDefaults;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.KILOBYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
-import static java.util.concurrent.TimeUnit.HOURS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -38,22 +36,11 @@ public class TestHttpServerConfig
     @Test
     public void testDefaults()
     {
-        ConfigAssertions.assertRecordedDefaults(ConfigAssertions.recordDefaults(HttpServerConfig.class)
+        assertRecordedDefaults(recordDefaults(HttpServerConfig.class)
                 .setHttpEnabled(true)
                 .setHttpPort(8080)
                 .setHttpAcceptQueueSize(8000)
                 .setHttpsEnabled(false)
-                .setHttpsPort(8443)
-                .setSecureRandomAlgorithm(null)
-                .setHttpsIncludedCipherSuites("")
-                .setHttpsExcludedCipherSuites(String.join(",", getJettyDefaultExcludedCiphers()))
-                .setSslSessionTimeout(new Duration(4, HOURS))
-                .setSslSessionCacheSize(10_000)
-                .setKeystorePath(null)
-                .setKeystorePassword(null)
-                .setKeyManagerPassword(null)
-                .setTrustStorePath(null)
-                .setTrustStorePassword(null)
                 .setLogPath("var/log/http-request.log")
                 .setLogEnabled(true)
                 .setRequestStatsEnabled(true)
@@ -98,17 +85,6 @@ public class TestHttpServerConfig
                 .put("http-server.http.port", "1")
                 .put("http-server.accept-queue-size", "1024")
                 .put("http-server.https.enabled", "true")
-                .put("http-server.https.port", "2")
-                .put("http-server.https.keystore.path", "/keystore")
-                .put("http-server.https.keystore.key", "keystore password")
-                .put("http-server.https.keymanager.password", "keymanager password")
-                .put("http-server.https.truststore.path", "/truststore")
-                .put("http-server.https.truststore.key", "truststore password")
-                .put("http-server.https.secure-random-algorithm", "NativePRNG")
-                .put("http-server.https.included-cipher", "TLS_RSA_WITH_AES_128_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA")
-                .put("http-server.https.excluded-cipher", "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA")
-                .put("http-server.https.ssl-session-timeout", "7h")
-                .put("http-server.https.ssl-session-cache-size", "456")
                 .put("http-server.log.path", "/log")
                 .put("http-server.log.enabled", "false")
                 .put("http-server.log.max-size", "1GB")
@@ -150,17 +126,6 @@ public class TestHttpServerConfig
                 .setHttpPort(1)
                 .setHttpAcceptQueueSize(1024)
                 .setHttpsEnabled(true)
-                .setHttpsPort(2)
-                .setHttpsIncludedCipherSuites("TLS_RSA_WITH_AES_128_CBC_SHA,TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA")
-                .setHttpsExcludedCipherSuites("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA")
-                .setSslSessionTimeout(new Duration(7, HOURS))
-                .setSslSessionCacheSize(456)
-                .setKeystorePath("/keystore")
-                .setKeystorePassword("keystore password")
-                .setKeyManagerPassword("keymanager password")
-                .setTrustStorePath("/truststore")
-                .setTrustStorePassword("truststore password")
-                .setSecureRandomAlgorithm("NativePRNG")
                 .setLogPath("/log")
                 .setLogEnabled(false)
                 .setRequestStatsEnabled(false)
@@ -196,12 +161,6 @@ public class TestHttpServerConfig
                 .setDefaultAllowedRoles("user, internal, admin")
                 .setAllowUnsecureRequestsInAuthorizer(true);
 
-        ConfigAssertions.assertFullMapping(properties, expected);
-    }
-
-    private List<String> getJettyDefaultExcludedCiphers()
-    {
-        SslContextFactory sslContextFactory = new SslContextFactory();
-        return Arrays.asList(sslContextFactory.getExcludeCipherSuites());
+        assertFullMapping(properties, expected);
     }
 }

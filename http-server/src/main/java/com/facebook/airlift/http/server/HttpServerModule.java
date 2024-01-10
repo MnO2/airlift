@@ -15,13 +15,15 @@
  */
 package com.facebook.airlift.http.server;
 
+import com.facebook.airlift.configuration.AbstractConfigurationAwareModule;
 import com.facebook.airlift.discovery.client.AnnouncementHttpServerInfo;
+import com.facebook.airlift.http.server.HttpServer.ClientCertificate;
 import com.facebook.airlift.http.server.HttpServerBinder.HttpResourceBinding;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.Binder;
-import com.google.inject.Module;
 import com.google.inject.Provides;
 import com.google.inject.Scopes;
+import org.eclipse.jetty.util.ssl.SslContextFactory;
 
 import javax.servlet.Filter;
 import javax.servlet.Servlet;
@@ -29,10 +31,12 @@ import javax.servlet.Servlet;
 import java.util.List;
 import java.util.Set;
 
+import static com.facebook.airlift.configuration.ConditionalModule.installModuleIf;
 import static com.facebook.airlift.configuration.ConfigBinder.configBinder;
 import static com.facebook.airlift.event.client.EventBinder.eventBinder;
 import static com.google.inject.multibindings.MapBinder.newMapBinder;
 import static com.google.inject.multibindings.Multibinder.newSetBinder;
+import static com.google.inject.multibindings.OptionalBinder.newOptionalBinder;
 import static org.weakref.jmx.guice.ExportBinder.newExporter;
 
 /**
@@ -53,22 +57,23 @@ import static org.weakref.jmx.guice.ExportBinder.newExporter;
  * To enable Basic Auth, a {@link org.eclipse.jetty.security.LoginService} must be bound elsewhere
  * <p>
  * To enable HTTPS, {@link HttpServerConfig#isHttpsEnabled()} must return true
- * and {@link HttpServerConfig#getKeystorePath()}
- * and {@link HttpServerConfig#getKeystorePassword()} must return the path to
+ * and {@link HttpsConfig#getKeystorePath()}
+ * and {@link HttpsConfig#getKeystorePassword()} must return the path to
  * the keystore containing the SSL cert and the password to the keystore, respectively.
- * The HTTPS port is specified via {@link HttpServerConfig#getHttpsPort()}.
+ * The HTTPS port is specified via {@link HttpsConfig#getHttpsPort()}.
  */
 public class HttpServerModule
-        implements Module
+        extends AbstractConfigurationAwareModule
 {
     public static final String REALM_NAME = "Airlift";
 
     @Override
-    public void configure(Binder binder)
+    protected void setup(Binder binder)
     {
         binder.disableCircularProxies();
 
         binder.bind(HttpServer.class).toProvider(HttpServerProvider.class).in(Scopes.SINGLETON);
+        newOptionalBinder(binder, ClientCertificate.class).setDefault().toInstance(ClientCertificate.NONE);
         newExporter(binder).export(HttpServer.class).withGeneratedName();
         binder.bind(HttpServerInfo.class).in(Scopes.SINGLETON);
         binder.bind(RequestStats.class).in(Scopes.SINGLETON);
@@ -76,10 +81,12 @@ public class HttpServerModule
         newSetBinder(binder, Filter.class, TheServlet.class);
         newSetBinder(binder, Filter.class, TheAdminServlet.class);
         newSetBinder(binder, HttpResourceBinding.class, TheServlet.class);
+        newOptionalBinder(binder, SslContextFactory.Server.class);
 
         newExporter(binder).export(RequestStats.class).withGeneratedName();
 
         configBinder(binder).bindConfig(HttpServerConfig.class);
+        newOptionalBinder(binder, HttpsConfig.class);
 
         eventBinder(binder).bindEventClient(HttpRequestEvent.class);
 
@@ -87,6 +94,8 @@ public class HttpServerModule
         newSetBinder(binder, Filter.class, TheServlet.class).addBinding()
                 .to(AuthenticationFilter.class).in(Scopes.SINGLETON);
         newSetBinder(binder, Authenticator.class);
+        install(installModuleIf(HttpServerConfig.class, HttpServerConfig::isHttpsEnabled, moduleBinder ->
+                configBinder(moduleBinder).bindConfig(HttpsConfig.class)));
     }
 
     @Provides
