@@ -262,8 +262,9 @@ public class HttpServer
                     firstNonNull(acceptors, -1),
                     firstNonNull(selectors, -1),
                     sslConnectionFactory,
-                    new HttpConnectionFactory(httpsConfiguration),
-                    http2);
+                    alpn,
+                    http2,
+                    new HttpConnectionFactory(httpsConfiguration));
             httpsConnector.setName("https");
             httpsConnector.setPort(httpServerInfo.getHttpsUri().getPort());
             httpsConnector.setIdleTimeout(config.getNetworkMaxIdleTime().toMillis());
@@ -302,6 +303,9 @@ public class HttpServer
                 HTTP2ServerConnectionFactory http2 = new HTTP2ServerConnectionFactory(adminConfiguration);
                 http2.setMaxConcurrentStreams(config.getHttp2MaxConcurrentStreams());
 
+                NegotiatingServerConnectionFactory alpn = new ALPNServerConnectionFactory();
+                alpn.setDefaultProtocol("http/1.1"); // Speak HTTP 1.1 over TLS if negotiation fails
+
                 adminConnector = createServerConnector(
                         httpServerInfo.getAdminChannel(),
                         server,
@@ -310,8 +314,9 @@ public class HttpServer
                         0,
                         -1,
                         sslConnectionFactory,
-                        new HttpConnectionFactory(adminConfiguration),
-                        http2);
+                        alpn,
+                        http2,
+                        new HttpConnectionFactory(adminConfiguration));
             }
             else {
                 HttpConnectionFactory http1 = new HttpConnectionFactory(adminConfiguration);

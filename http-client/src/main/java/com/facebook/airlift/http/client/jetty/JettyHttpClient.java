@@ -188,7 +188,9 @@ public class JettyHttpClient
             client.setInitialStreamRecvWindow(toIntExact(config.getHttp2InitialStreamReceiveWindowSize().toBytes()));
             client.setInputBufferSize(toIntExact(config.getHttp2InputBufferSize().toBytes()));
             client.setSelectors(config.getSelectorCount());
-            transport = new HttpClientTransportOverHTTP2(client);
+            HttpClientTransportOverHTTP2 transportOverHttp2 = new HttpClientTransportOverHTTP2(client);
+            transportOverHttp2.setUseALPN(true);
+            transport = transportOverHttp2;
         }
         else {
             transport = new HttpClientTransportOverHTTP(config.getSelectorCount());
