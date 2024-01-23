@@ -70,6 +70,7 @@ public class TestingHttpServerModule
 
         binder.bind(HttpServerInfo.class).in(Scopes.SINGLETON);
         binder.bind(TestingHttpServer.class).in(Scopes.SINGLETON);
+        newOptionalBinder(binder, HttpServer.ClientCertificate.class).setDefault().toInstance(HttpServer.ClientCertificate.NONE);
         binder.bind(HttpServer.class).to(Key.get(TestingHttpServer.class));
         newMapBinder(binder, String.class, Servlet.class, TheServlet.class);
         newSetBinder(binder, Filter.class, TheServlet.class);

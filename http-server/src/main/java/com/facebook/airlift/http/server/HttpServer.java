@@ -25,7 +25,9 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.primitives.Ints;
+import org.eclipse.jetty.alpn.server.ALPNServerConnectionFactory;
 import org.eclipse.jetty.http2.server.HTTP2CServerConnectionFactory;
+import org.eclipse.jetty.http2.server.HTTP2ServerConnectionFactory;
 import org.eclipse.jetty.io.ConnectionStatistics;
 import org.eclipse.jetty.jmx.MBeanContainer;
 import org.eclipse.jetty.security.ConstraintMapping;
@@ -36,6 +38,7 @@ import org.eclipse.jetty.security.authentication.BasicAuthenticator;
 import org.eclipse.jetty.server.ConnectionFactory;
 import org.eclipse.jetty.server.HttpConfiguration;
 import org.eclipse.jetty.server.HttpConnectionFactory;
+import org.eclipse.jetty.server.NegotiatingServerConnectionFactory;
 import org.eclipse.jetty.server.SecureRequestCustomizer;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
@@ -239,6 +242,16 @@ public class HttpServer
             this.sslContextFactory = Optional.of(this.sslContextFactory.orElseGet(() -> createReloadingSslContextFactory(httpsConfig, clientCertificate, nodeInfo.getEnvironment())));
             SslConnectionFactory sslConnectionFactory = new SslConnectionFactory(sslContextFactory.get(), "http/1.1");
 
+            HTTP2ServerConnectionFactory http2 = new HTTP2ServerConnectionFactory(httpsConfiguration);
+            http2.setInitialSessionRecvWindow(toIntExact(config.getHttp2InitialSessionReceiveWindowSize().toBytes()));
+            http2.setInitialStreamRecvWindow(toIntExact(config.getHttp2InitialStreamReceiveWindowSize().toBytes()));
+            http2.setMaxConcurrentStreams(config.getHttp2MaxConcurrentStreams());
+            http2.setInputBufferSize(toIntExact(config.getHttp2InputBufferSize().toBytes()));
+            http2.setStreamIdleTimeout(config.getHttp2StreamIdleTimeout().toMillis());
+
+            NegotiatingServerConnectionFactory alpn = new ALPNServerConnectionFactory();
+            alpn.setDefaultProtocol("http/1.1"); // Speak HTTP 1.1 over TLS if negotiation fails
+
             Integer acceptors = config.getHttpsAcceptorThreads();
             Integer selectors = config.getHttpsSelectorThreads();
             httpsConnector = createServerConnector(
@@ -249,7 +262,8 @@ public class HttpServer
                     firstNonNull(acceptors, -1),
                     firstNonNull(selectors, -1),
                     sslConnectionFactory,
-                    new HttpConnectionFactory(httpsConfiguration));
+                    new HttpConnectionFactory(httpsConfiguration),
+                    http2);
             httpsConnector.setName("https");
             httpsConnector.setPort(httpServerInfo.getHttpsUri().getPort());
             httpsConnector.setIdleTimeout(config.getNetworkMaxIdleTime().toMillis());
@@ -284,6 +298,10 @@ public class HttpServer
                 HttpsConfig httpsConfig = maybeHttpsConfig.orElseThrow(() -> new NoSuchElementException("No value present for maybeHttpsConfig"));
                 this.sslContextFactory = Optional.of(this.sslContextFactory.orElseGet(() -> createReloadingSslContextFactory(httpsConfig, clientCertificate, nodeInfo.getEnvironment())));
                 SslConnectionFactory sslConnectionFactory = new SslConnectionFactory(sslContextFactory.get(), "http/1.1");
+
+                HTTP2ServerConnectionFactory http2 = new HTTP2ServerConnectionFactory(adminConfiguration);
+                http2.setMaxConcurrentStreams(config.getHttp2MaxConcurrentStreams());
+
                 adminConnector = createServerConnector(
                         httpServerInfo.getAdminChannel(),
                         server,
@@ -292,7 +310,8 @@ public class HttpServer
                         0,
                         -1,
                         sslConnectionFactory,
-                        new HttpConnectionFactory(adminConfiguration));
+                        new HttpConnectionFactory(adminConfiguration),
+                        http2);
             }
             else {
                 HttpConnectionFactory http1 = new HttpConnectionFactory(adminConfiguration);
